@@ -1,0 +1,23 @@
+{
+  "name": "redlock-poc",
+  "version": "1.0.0",
+  "description": "Proof of concept for Redlock distributed locking with Node.js cluster",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "keywords": [
+    "redlock",
+    "redis",
+    "distributed-locking",
+    "cluster"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "redlock": "^4.2.1",
+    "ioredis": "^5.3.2"
+  }
+}
