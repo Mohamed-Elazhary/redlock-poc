@@ -1,6 +1,6 @@
 import { createRedisClient } from '../config/redis.js';
 import { createRedlock } from '../config/redlock.js';
-import { validateAndInitializeADS } from '../services/adsService.js';
+import { performLockedWarmUp } from '../services/lockService.js';
 import { createHTTPServer } from '../server/httpServer.js';
 
 const HTTP_PORT = process.env.HTTP_PORT || 3000;
@@ -13,7 +13,11 @@ export async function startWorker(workerId, processId) {
     await redis.ping();
     console.log(`[Worker ${workerId} (PID: ${processId})] Redis connection established\n`);
 
-    await validateAndInitializeADS(redis, workerId, processId);
+    try {
+      await performLockedWarmUp(redlock, redis, workerId, processId);
+    } catch (error) {
+      console.log(`[Worker ${workerId} (PID: ${processId})] Warmup failed but continuing worker startup...`);
+    }
 
     const httpServer = createHTTPServer(redis, redlock, workerId, processId, HTTP_PORT);
 
