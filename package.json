@@ -17,7 +17,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "redlock": "^4.2.1",
-    "ioredis": "^5.3.2"
+    "ioredis": "^5.3.2",
+    "redlock": "^5.0.0-beta.2"
   }
 }
