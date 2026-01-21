@@ -13,6 +13,7 @@ This application demonstrates how Redlock ensures that only one worker process c
 - **Redis Integration**: Connects to Redis for data storage
 - **Redlock**: Implements distributed locking to prevent concurrent writes
 - **ADS_REDLOCK Key Validation**: Checks if the ADS_REDLOCK key exists at startup and initializes it if needed
+- **Warmup Guard**: Prevents frequent re-initialization using WARMUP_LAST_UPDATE key (once per minute)
 - **Concurrent Operations**: Multiple workers attempt operations simultaneously, demonstrating lock behavior
 - **Modular Architecture**: Clean separation of concerns with organized file structure
 
@@ -58,7 +59,7 @@ redlock-poc/
 - **`config/redis.js`**: Creates and configures Redis client with connection handling
 - **`config/redlock.js`**: Creates Redlock instance with distributed locking configuration
 - **`services/adsService.js`**: Business logic for ADS operations:
-  - `validateAndInitializeADS()` - Check/create ADS key at startup
+  - `validateAndInitializeADS()` - Check/create ADS key at startup with warmup guard
   - `getADS()` - Get current ADS value from Redis
   - `updateADS()` - Update ADS value in Redis
 - **`services/lockService.js`**: Lock management and operations:
@@ -194,7 +195,11 @@ curl http://localhost:3001/health
 2. **Worker Initialization** (`worker/worker.js`):
    - Creates Redis connection using `config/redis.js`
    - Initializes Redlock using `config/redlock.js`
-   - Validates/initializes ADS_REDLOCK key using `services/adsService.js`
+   - Validates/initializes ADS_REDLOCK key using `services/adsService.js`:
+     - Checks if `ADS_REDLOCK` exists
+     - If not exists: Creates `ADS_REDLOCK` and sets `WARMUP_LAST_UPDATE` with current UTC date
+     - If exists: Checks `WARMUP_LAST_UPDATE` to prevent re-initialization within same minute (UTC)
+     - Re-initializes only if warmup period has expired
    - Starts HTTP server using `server/httpServer.js`
    - Sets up graceful shutdown handlers
 
@@ -209,11 +214,27 @@ curl http://localhost:3001/health
    - Releases the lock after completion
    - Other workers wait if the lock is held by another worker
 
+## Initialization Logic
+
+The `validateAndInitializeADS` function implements a warmup guard mechanism:
+
+1. **Check `ADS_REDLOCK` existence**:
+   - If it doesn't exist → Initialize both `ADS_REDLOCK` and `WARMUP_LAST_UPDATE` keys
+   - If it exists → Continue to warmup check
+
+2. **Warmup Guard Check** (when `ADS_REDLOCK` exists):
+   - Check if `WARMUP_LAST_UPDATE` exists and is within the current minute (UTC)
+   - If within current minute → Skip re-initialization, use existing `ADS_REDLOCK`
+   - If not within current minute → Re-initialize both `ADS_REDLOCK` and `WARMUP_LAST_UPDATE`
+
+This prevents multiple workers from re-initializing simultaneously and limits initialization to once per minute.
+
 ## Expected Output
 
 You'll see output showing:
 - Each worker connecting to Redis
 - ADS_REDLOCK key validation/initialization
+- WARMUP_LAST_UPDATE key creation/check
 - Lock acquisition attempts and timing
 - Operations being performed sequentially (not concurrently) due to locks
 - Lock releases allowing the next worker to proceed
@@ -226,8 +247,9 @@ Starting 4 worker processes...
 
 [Worker 1 (PID: 12346)] Connected to Redis
 [Worker 1 (PID: 12346)] Redis connection established
-[Worker 1 (PID: 12346)] ADS_REDLOCK key does not exist. Creating initial value...
+[Worker 1 (PID: 12346)] ADS_REDLOCK does not exist. Creating initial value...
 [Worker 1 (PID: 12346)] Created ADS_REDLOCK key: { id: 'worker-1', name: 'Initial Worker 1', time: '...' }
+[Worker 1 (PID: 12346)] Set WARMUP_LAST_UPDATE to: 2026-01-21T00:00:00.000Z
 
 [Worker 1 (PID: 12346)] Attempting to acquire lock for: Cache Update Operation 1
 [Worker 1 (PID: 12346)] ✓ Lock acquired after 5ms for: Cache Update Operation 1
