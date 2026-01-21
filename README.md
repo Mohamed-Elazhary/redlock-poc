@@ -13,7 +13,7 @@ This application demonstrates how Redlock ensures that only one worker process c
 - **Redis Integration**: Connects to Redis for data storage
 - **Redlock**: Implements distributed locking to prevent concurrent writes
 - **ADS_REDLOCK Key Validation**: Checks if the ADS_REDLOCK key exists at startup and initializes it if needed
-- **Warmup Guard**: Prevents frequent re-initialization using WARMUP_LAST_UPDATE key (once per minute)
+- **Warmup Guard**: Prevents frequent re-initialization using WARMUP_LAST_SUCCESSFUL key (once per minute) with retry mechanism
 - **Concurrent Operations**: Multiple workers attempt operations simultaneously, demonstrating lock behavior
 - **Modular Architecture**: Clean separation of concerns with organized file structure
 
@@ -196,10 +196,9 @@ curl http://localhost:3001/health
    - Creates Redis connection using `config/redis.js`
    - Initializes Redlock using `config/redlock.js`
    - Validates/initializes ADS_REDLOCK key using `services/adsService.js`:
-     - Checks if `ADS_REDLOCK` exists
-     - If not exists: Creates `ADS_REDLOCK` and sets `WARMUP_LAST_UPDATE` with current UTC date
-     - If exists: Checks `WARMUP_LAST_UPDATE` to prevent re-initialization within same minute (UTC)
-     - Re-initializes only if warmup period has expired
+     - Checks `WARMUP_LAST_SUCCESSFUL` with retry mechanism (up to 3 attempts)
+     - If valid and within current minute: Uses existing `ADS_REDLOCK`
+     - If invalid or expired: Initializes both `ADS_REDLOCK` and `WARMUP_LAST_SUCCESSFUL`
    - Starts HTTP server using `server/httpServer.js`
    - Sets up graceful shutdown handlers
 
@@ -216,25 +215,31 @@ curl http://localhost:3001/health
 
 ## Initialization Logic
 
-The `validateAndInitializeADS` function implements a warmup guard mechanism:
+The `validateAndInitializeADS` function implements a warmup guard mechanism with retry logic:
 
-1. **Check `ADS_REDLOCK` existence**:
-   - If it doesn't exist → Initialize both `ADS_REDLOCK` and `WARMUP_LAST_UPDATE` keys
-   - If it exists → Continue to warmup check
+1. **Check `WARMUP_LAST_SUCCESSFUL` with Retry**:
+   - Uses `async-retry` to retry validation up to 3 times
+   - Checks if `WARMUP_LAST_SUCCESSFUL` exists and is within the current minute (UTC)
+   - Retry configuration: 3 attempts, 100-500ms timeout between retries
+   - If validation succeeds → Get existing `ADS_REDLOCK` and return it (skip initialization)
+   - If all retries fail → Proceed to initialization
 
-2. **Warmup Guard Check** (when `ADS_REDLOCK` exists):
-   - Check if `WARMUP_LAST_UPDATE` exists and is within the current minute (UTC)
-   - If within current minute → Skip re-initialization, use existing `ADS_REDLOCK`
-   - If not within current minute → Re-initialize both `ADS_REDLOCK` and `WARMUP_LAST_UPDATE`
+2. **Initialize Both Keys**:
+   - Create/update `ADS_REDLOCK` with initial data
+   - Set `WARMUP_LAST_SUCCESSFUL` with current UTC date
 
-This prevents multiple workers from re-initializing simultaneously and limits initialization to once per minute.
+This approach:
+- Prevents multiple workers from re-initializing simultaneously
+- Limits initialization to once per minute
+- Handles transient Redis read issues with retry mechanism
+- Uses `WARMUP_LAST_SUCCESSFUL` as the single source of truth
 
 ## Expected Output
 
 You'll see output showing:
 - Each worker connecting to Redis
 - ADS_REDLOCK key validation/initialization
-- WARMUP_LAST_UPDATE key creation/check
+- WARMUP_LAST_SUCCESSFUL key creation/check
 - Lock acquisition attempts and timing
 - Operations being performed sequentially (not concurrently) due to locks
 - Lock releases allowing the next worker to proceed
@@ -249,7 +254,7 @@ Starting 4 worker processes...
 [Worker 1 (PID: 12346)] Redis connection established
 [Worker 1 (PID: 12346)] ADS_REDLOCK does not exist. Creating initial value...
 [Worker 1 (PID: 12346)] Created ADS_REDLOCK key: { id: 'worker-1', name: 'Initial Worker 1', time: '...' }
-[Worker 1 (PID: 12346)] Set WARMUP_LAST_UPDATE to: 2026-01-21T00:00:00.000Z
+[Worker 1 (PID: 12346)] Set WARMUP_LAST_SUCCESSFUL to: 2026-01-21T00:00:00.000Z
 
 [Worker 1 (PID: 12346)] Attempting to acquire lock for: Cache Update Operation 1
 [Worker 1 (PID: 12346)] ✓ Lock acquired after 5ms for: Cache Update Operation 1

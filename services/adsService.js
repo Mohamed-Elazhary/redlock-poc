@@ -1,3 +1,5 @@
+import retry from 'async-retry';
+
 function isWithinCurrentMinute(timestamp) {
   const now = new Date();
   const timestampDate = new Date(timestamp);
@@ -11,37 +13,46 @@ function isWithinCurrentMinute(timestamp) {
   );
 }
 
+async function retryValidateLastSuccessful(redis, workerId, processId) {
+  return await retry(
+    async () => {
+      const lastSuccessful = await redis.get('WARMUP_LAST_SUCCESSFUL');
+      if (lastSuccessful && isWithinCurrentMinute(lastSuccessful)) {
+        return true;
+      }
+      return false;
+    },
+    {
+      retries: 3,
+      minTimeout: 100,
+      maxTimeout: 500,
+      onRetry: (error, attempt) => {
+        console.log(`[Worker ${workerId} (PID: ${processId})] Retry attempt ${attempt} to validate WARMUP_LAST_SUCCESSFUL...`);
+      }
+    }
+  );
+}
+
 export async function validateAndInitializeADS(redis, workerId, processId) {
   try {
-    const existing = await redis.get('ADS_REDLOCK');
+    console.log(`[Worker ${workerId} (PID: ${processId})] Validating and initializing ADS_REDLOCK...`);
     const currentUTCDate = new Date().toISOString();
     
-    if (!existing) {
-      console.log(`[Worker ${workerId} (PID: ${processId})] ADS_REDLOCK does not exist. Creating initial value...`);
-      const initialADS = {
-        id: `worker-${workerId}`,
-        name: `Initial Worker ${workerId}`,
-        time: currentUTCDate,
-      };
-      
-      await redis.set('ADS_REDLOCK', JSON.stringify(initialADS));
-      await redis.set('WARMUP_LAST_UPDATE', currentUTCDate);
-      
-      console.log(`[Worker ${workerId} (PID: ${processId})] Created ADS_REDLOCK key:`, initialADS);
-      console.log(`[Worker ${workerId} (PID: ${processId})] Set WARMUP_LAST_UPDATE to:`, currentUTCDate);
-      
-      return initialADS;
+    try {
+      const isValid = await retryValidateLastSuccessful(redis, workerId, processId);
+      if (isValid) {
+        const existing = await redis.get('ADS_REDLOCK');
+        if (existing) {
+          const adsData = JSON.parse(existing);
+          console.log(`[Worker ${workerId} (PID: ${processId})] WARMUP_LAST_SUCCESSFUL is within current minute. Using existing ADS_REDLOCK:`, adsData);
+          return adsData;
+        }
+      }
+    } catch (error) {
+      console.log(`[Worker ${workerId} (PID: ${processId})] WARMUP_LAST_SUCCESSFUL validation failed after retries. Re-initializing...`);
     }
     
-    const adsData = JSON.parse(existing);
-    const warmupLastUpdate = await redis.get('WARMUP_LAST_UPDATE');
-    
-    if (warmupLastUpdate && isWithinCurrentMinute(warmupLastUpdate)) {
-      console.log(`[Worker ${workerId} (PID: ${processId})] ADS_REDLOCK exists and WARMUP_LAST_UPDATE is within current minute. Using existing ADS_REDLOCK:`, adsData);
-      return adsData;
-    }
-    
-    console.log(`[Worker ${workerId} (PID: ${processId})] ADS_REDLOCK exists but WARMUP_LAST_UPDATE is not within current minute. Re-initializing...`);
+    console.log(`[Worker ${workerId} (PID: ${processId})] Initializing ADS_REDLOCK...`);
     const initialADS = {
       id: `worker-${workerId}`,
       name: `Initial Worker ${workerId}`,
@@ -49,10 +60,10 @@ export async function validateAndInitializeADS(redis, workerId, processId) {
     };
     
     await redis.set('ADS_REDLOCK', JSON.stringify(initialADS));
-    await redis.set('WARMUP_LAST_UPDATE', currentUTCDate);
+    await redis.set('WARMUP_LAST_SUCCESSFUL', currentUTCDate);
     
-    console.log(`[Worker ${workerId} (PID: ${processId})] Re-initialized ADS_REDLOCK key:`, initialADS);
-    console.log(`[Worker ${workerId} (PID: ${processId})] Updated WARMUP_LAST_UPDATE to:`, currentUTCDate);
+    console.log(`[Worker ${workerId} (PID: ${processId})] Created ADS_REDLOCK key:`, initialADS);
+    console.log(`[Worker ${workerId} (PID: ${processId})] Set WARMUP_LAST_SUCCESSFUL to:`, currentUTCDate);
     
     return initialADS;
   } catch (error) {
