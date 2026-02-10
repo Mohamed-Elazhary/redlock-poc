@@ -14,7 +14,7 @@ This application demonstrates how Redlock ensures that only one worker process c
 - **Redlock**: Implements distributed locking to prevent concurrent writes
 - **ADS_REDLOCK Key Validation**: Checks if the ADS_REDLOCK key exists at startup and initializes it if needed
 - **Locked Warmup Operation**: Cache warmup uses distributed locking to prevent concurrent initialization
-- **Warmup Guard**: Prevents frequent re-initialization using WARMUP_LAST_SUCCESSFUL key (once per minute) with retry mechanism
+- **Warmup Guard**: Prevents frequent re-initialization using WARMUP_LAST_SUCCESSFUL key (once per minute)
 - **Concurrent Operations**: Multiple workers attempt operations simultaneously, demonstrating lock behavior
 - **Modular Architecture**: Clean separation of concerns with organized file structure
 
@@ -199,7 +199,7 @@ curl http://localhost:3001/health
    - Initializes Redlock using `config/redlock.js`
    - Performs locked cache warmup using `services/lockService.js`:
      - Acquires lock with key `resource:warmup:write`
-     - Checks `WARMUP_LAST_SUCCESSFUL` with retry mechanism (up to 3 attempts)
+     - Checks `WARMUP_LAST_SUCCESSFUL` to see if it's within current minute (UTC)
      - If valid and within current minute: Uses existing `ADS_REDLOCK`
      - If invalid or expired: Initializes both `ADS_REDLOCK` and `WARMUP_LAST_SUCCESSFUL`
      - Releases lock after completion
@@ -233,14 +233,12 @@ The cache warmup process uses distributed locking to ensure thread-safe initiali
    - Only one worker can perform warmup at a time
    - Prevents concurrent initialization race conditions
 
-2. **Warmup Guard with Retry** (`performWarmUp`):
+2. **Warmup Guard** (`performWarmUp`):
 
-   - **Check `WARMUP_LAST_SUCCESSFUL` with Retry**:
-     - Uses `async-retry` to retry validation up to 3 times
+   - **Check `WARMUP_LAST_SUCCESSFUL`**:
      - Checks if `WARMUP_LAST_SUCCESSFUL` exists and is within the current minute (UTC)
-     - Retry configuration: 3 attempts, 100-500ms timeout between retries
      - If validation succeeds → Get existing `ADS_REDLOCK` and return it (skip initialization)
-     - If all retries fail → Proceed to initialization
+     - If validation fails → Proceed to initialization
 
    - **Initialize Both Keys**:
      - Create/update `ADS_REDLOCK` with initial data
@@ -250,7 +248,6 @@ This approach:
 - Uses distributed locking to prevent concurrent initialization
 - Prevents multiple workers from re-initializing simultaneously
 - Limits initialization to once per minute
-- Handles transient Redis read issues with retry mechanism
 - Uses `WARMUP_LAST_SUCCESSFUL` as the single source of truth
 - Gracefully handles lock acquisition failures
 
