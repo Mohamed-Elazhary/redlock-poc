@@ -1,4 +1,3 @@
-import retry from 'async-retry';
 
 function isWithinCurrentMinute(timestamp) {
   const now = new Date();
@@ -13,31 +12,12 @@ function isWithinCurrentMinute(timestamp) {
   );
 }
 
-async function retryValidateLastSuccessful(redis, workerId, processId) {
-  return await retry(
-    async () => {
-      const lastSuccessful = await redis.get('WARMUP_LAST_SUCCESSFUL');
-      if (lastSuccessful && isWithinCurrentMinute(lastSuccessful)) {
-        return true;
-      }
-      return false;
-    },
-    {
-      retries: 3,
-      minTimeout: 100,
-      maxTimeout: 500,
-      onRetry: (error, attempt) => {
-        console.log(`[Worker ${workerId} (PID: ${processId})] Retry attempt ${attempt} to validate WARMUP_LAST_SUCCESSFUL...`);
-      }
-    }
-  );
-}
-
 export async function performWarmUp(redis, workerId, processId) {
   const currentUTCDate = new Date().toISOString();
 
   try {
-    const isValid = await retryValidateLastSuccessful(redis, workerId, processId);
+   const lastSuccessful = await redis.get('WARMUP_LAST_SUCCESSFUL');
+   const isValid = lastSuccessful && isWithinCurrentMinute(lastSuccessful);
     if (isValid) {
       const existing = await redis.get('ADS_REDLOCK');
       if (existing) {
